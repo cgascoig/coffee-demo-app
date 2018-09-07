@@ -10,6 +10,7 @@ import (
 	dialogflow "cloud.google.com/go/dialogflow/apiv2"
 	"github.com/Sirupsen/logrus"
 	"github.com/gorilla/mux"
+	"google.golang.org/api/option"
 	dialogflowpb "google.golang.org/genproto/googleapis/cloud/dialogflow/v2"
 )
 
@@ -19,21 +20,26 @@ var (
 
 type loggingHandlerFunc func(*logrus.Logger, http.ResponseWriter, *http.Request)
 
-func orderHandler(log *logrus.Logger, w http.ResponseWriter, r *http.Request) {
+type coffeeserver struct {
+	log                     *logrus.Logger
+	dialogflowSessionClient *dialogflow.SessionsClient
+}
+
+func (cs *coffeeserver) orderHandler(w http.ResponseWriter, r *http.Request) {
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
 		http.Error(w, "Unable to get audio bytes", http.StatusBadRequest)
-		log.Error("Unable to get audio bytes")
+		cs.log.Error("Unable to get audio bytes")
 		return
 	}
 	// ioutil.WriteFile("test.wav", body, 0777)
 
 	ctx := context.Background()
 
-	sessionClient, err := dialogflow.NewSessionsClient(ctx)
+	sessionClient, err := dialogflow.NewSessionsClient(ctx, option.WithCredentialsFile("keys/dialogflowclient-key.json"))
 	if err != nil {
 		http.Error(w, "Error creating sessionClient", http.StatusInternalServerError)
-		log.Error("Error creating sessionClient: ", err)
+		cs.log.Error("Error creating sessionClient: ", err)
 		return
 	}
 	defer sessionClient.Close()
@@ -55,7 +61,7 @@ func orderHandler(log *logrus.Logger, w http.ResponseWriter, r *http.Request) {
 	response, err := sessionClient.DetectIntent(ctx, &request)
 	if err != nil {
 		http.Error(w, "Error calling dialogflow service", http.StatusInternalServerError)
-		log.Error("Error calling dialogflow service: ", err)
+		cs.log.Error("Error calling dialogflow service: ", err)
 		return
 	}
 
@@ -64,33 +70,48 @@ func orderHandler(log *logrus.Logger, w http.ResponseWriter, r *http.Request) {
 	parameters := queryResult.GetParameters()
 
 	fmt.Fprintf(w, "Fulfillment text from dialogflow: %s", fulfillmentText)
-	log.Info("Fulfillment text from dialogflow: ", fulfillmentText)
-	log.Info("Parameters from dialogflow: ", parameters)
-	log.Info("Coffee type: ", parameters.Fields["coffee"].GetStringValue(), " quantity: ", parameters.Fields["quantity"].GetNumberValue())
+	cs.log.Info("Fulfillment text from dialogflow: ", fulfillmentText)
+	cs.log.Info("Parameters from dialogflow: ", parameters)
+	// cs.log.Info("Coffee type: ", parameters.Fields["coffee"].GetStringValue(), " quantity: ", parameters.Fields["quantity"].GetNumberValue())
 
 }
 
-func indexHandler(log *logrus.Logger, w http.ResponseWriter, r *http.Request) {
+func (cs *coffeeserver) indexHandler(w http.ResponseWriter, r *http.Request) {
 	http.ServeFile(w, r, "static/index.html")
 }
 
-func loggingHandler(log *logrus.Logger, handler loggingHandlerFunc) http.HandlerFunc {
+func (cs *coffeeserver) loggingHandler(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
-		log.WithFields(logrus.Fields{"Method": r.Method, "URI": r.RequestURI}).Debug("Handling request")
-		handler(log, w, r)
-		log.Debug("Finished handling request")
+		cs.log.WithFields(logrus.Fields{"Method": r.Method, "URI": r.RequestURI}).Debug("Handling request")
+		handler(w, r)
+		cs.log.Debug("Finished handling request")
 	}
 }
 
-func run(log *logrus.Logger) {
+func (cs *coffeeserver) getRouter() *mux.Router {
 	r := mux.NewRouter()
-	r.HandleFunc("/order", loggingHandler(log, orderHandler)).Methods("POST")
-	r.HandleFunc("/", loggingHandler(log, indexHandler))
+	r.HandleFunc("/order", cs.loggingHandler(cs.orderHandler)).Methods("POST")
+	r.HandleFunc("/", cs.loggingHandler(cs.indexHandler))
 	r.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./static"))))
 
+	return r
+}
+
+func newCoffeeServer(log *logrus.Logger) *coffeeserver {
+	cs := coffeeserver{
+		log: log,
+	}
+
+	return &cs
+}
+
+func run(log *logrus.Logger) {
+	cs := newCoffeeServer(log)
+	r := cs.getRouter()
+
 	log.Info("Starting HTTP server")
-	http.ListenAndServe(":5000", r)
+	log.Error("HTTP server shutdown: ", http.ListenAndServeTLS(":5000", "keys/cert.pem", "keys/key.pem", r))
 }
 
 func main() {

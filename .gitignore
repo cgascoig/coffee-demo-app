@@ -1,1 +1,2 @@
-dialogflowclient1.json
+keys/**
+!**/.keep

@@ -68,6 +68,8 @@ function startRecording() {
 		recorder.onComplete = function(recorder, blob) { 
 			console.log("Encoding complete");
 
+			$("#spinner").show("slow");
+
       $.ajax({
         type: 'POST',
         url: '/order',
@@ -75,8 +77,12 @@ function startRecording() {
         contentType: 'audio/wav', // set accordingly
         processData: false
       }).done(function(data) {
-          console.log(data);
-      });
+					console.log(data);
+					$("#response").text(data);
+			})
+			.always(function(data) {
+				$("#spinner").hide("slow");
+			});
 		}
 
 		recorder.setOptions({
@@ -118,6 +124,10 @@ function stopRecording() {
 $(function() {
   console.log( "ready!" );
 
-  $("#recordButton").click(startRecording);
-  $("#stopButton").click(stopRecording);
+  // $("#recordButton").click(startRecording);
+	// $("#stopButton").click(stopRecording);
+	
+	$("#recordButton").mousedown(startRecording);
+	$("#recordButton").mouseup(stopRecording);
+	$("#recordButton").mouseleave(stopRecording);
 });

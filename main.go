@@ -6,16 +6,22 @@ import (
 	"fmt"
 	"io/ioutil"
 	"net/http"
+	"strconv"
 
 	dialogflow "cloud.google.com/go/dialogflow/apiv2"
 	"github.com/Sirupsen/logrus"
+	structpb "github.com/golang/protobuf/ptypes/struct"
 	"github.com/gorilla/mux"
 	"google.golang.org/api/option"
 	dialogflowpb "google.golang.org/genproto/googleapis/cloud/dialogflow/v2"
 )
 
 var (
-	verbose bool
+	verbose         bool
+	tls             bool
+	certFilename    string
+	certKeyFilename string
+	listenAddr      string
 )
 
 type loggingHandlerFunc func(*logrus.Logger, http.ResponseWriter, *http.Request)
@@ -65,10 +71,12 @@ func (cs *coffeeserver) orderHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cs.log.Debug("Sending audio samples to dialogflow to detect intent")
+
 	sessionPath := fmt.Sprintf("projects/%s/agent/sessions/%s", cs.projectID, cs.sessionID)
 
 	// In this example, we hard code the encoding and sample rate for simplicity.
-	audioConfig := dialogflowpb.InputAudioConfig{AudioEncoding: dialogflowpb.AudioEncoding_AUDIO_ENCODING_LINEAR_16, SampleRateHertz: 44100, LanguageCode: cs.languageCode}
+	audioConfig := dialogflowpb.InputAudioConfig{AudioEncoding: dialogflowpb.AudioEncoding_AUDIO_ENCODING_LINEAR_16, LanguageCode: cs.languageCode}
 
 	queryAudioInput := dialogflowpb.QueryInput_AudioConfig{AudioConfig: &audioConfig}
 
@@ -86,10 +94,31 @@ func (cs *coffeeserver) orderHandler(w http.ResponseWriter, r *http.Request) {
 	fulfillmentText := queryResult.GetFulfillmentText()
 	parameters := queryResult.GetParameters()
 
-	fmt.Fprintf(w, "Fulfillment text from dialogflow: %s", fulfillmentText)
 	cs.log.Info("Fulfillment text from dialogflow: ", fulfillmentText)
 	cs.log.Info("Parameters from dialogflow: ", parameters)
-	// cs.log.Info("Coffee type: ", parameters.Fields["coffee"].GetStringValue(), " quantity: ", parameters.Fields["quantity"].GetNumberValue())
+
+	if fulfillmentText == "" && queryResult.AllRequiredParamsPresent {
+		coffeeType := parameters.Fields["coffee"].GetStringValue()
+		qtyField := parameters.Fields["quantity"]
+
+		var coffeeQty int
+
+		switch qtyField.GetKind().(type) {
+		case *structpb.Value_NumberValue:
+			coffeeQty = int(parameters.Fields["quantity"].GetNumberValue())
+		case *structpb.Value_StringValue:
+			coffeeQty, _ = strconv.Atoi(parameters.Fields["quantity"].GetStringValue())
+		default:
+			cs.log.Error("Unrecognised type for quantity field", qtyField.GetKind())
+			http.Error(w, "Unrecognised type for quantity field", http.StatusInternalServerError)
+			return
+		}
+
+		cs.log.Info("Coffee type: ", coffeeType, " quantity: ", coffeeQty)
+		fmt.Fprintf(w, "OK, submitting your order for %d %s", coffeeQty, coffeeType)
+	} else {
+		fmt.Fprintf(w, fulfillmentText)
+	}
 
 }
 
@@ -100,7 +129,7 @@ func (cs *coffeeserver) indexHandler(w http.ResponseWriter, r *http.Request) {
 func (cs *coffeeserver) loggingHandler(handler http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 
-		cs.log.WithFields(logrus.Fields{"Method": r.Method, "URI": r.RequestURI}).Debug("Handling request")
+		cs.log.WithFields(logrus.Fields{"Method": r.Method, "URI": r.RequestURI}).Info("Handling request")
 		handler(w, r)
 		cs.log.Debug("Finished handling request")
 	}
@@ -131,8 +160,14 @@ func run(log *logrus.Logger) {
 	cs := newCoffeeServer(log)
 	r := cs.getRouter()
 
-	log.Info("Starting HTTP server")
-	log.Error("HTTP server shutdown: ", http.ListenAndServeTLS(":5000", "keys/cert.pem", "keys/key.pem", r))
+	if tls {
+		log.Info("Starting HTTPS server on ", listenAddr)
+		log.Error("HTTP server shutdown: ", http.ListenAndServeTLS(listenAddr, certFilename, certKeyFilename, r))
+	} else {
+		log.Info("Starting HTTP server on ", listenAddr)
+		log.Error("HTTP server shutdown: ", http.ListenAndServe(listenAddr, r))
+	}
+
 }
 
 func main() {
@@ -148,4 +183,9 @@ func main() {
 
 func init() {
 	flag.BoolVar(&verbose, "verbose", false, "Verbose logging")
+	flag.StringVar(&listenAddr, "addr", ":5000", "Address to listen on")
+
+	flag.BoolVar(&tls, "tls", false, "Enable TLS")
+	flag.StringVar(&certFilename, "cert", "", "Filename for certificate file (e.g. cert.pem)")
+	flag.StringVar(&certKeyFilename, "certkey", "", "Filename for certificate private key file (e.g. key.pem)")
 }

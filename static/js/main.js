@@ -72,7 +72,7 @@ function startRecording() {
 
       $.ajax({
         type: 'POST',
-        url: '/order',
+        url: 'order',
         data: blob,
         contentType: 'audio/wav', // set accordingly
         processData: false

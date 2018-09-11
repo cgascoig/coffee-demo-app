@@ -7,11 +7,13 @@ import (
 	"io/ioutil"
 	"net/http"
 	"strconv"
+	"time"
 
 	dialogflow "cloud.google.com/go/dialogflow/apiv2"
 	"github.com/Sirupsen/logrus"
 	structpb "github.com/golang/protobuf/ptypes/struct"
 	"github.com/gorilla/mux"
+	"github.com/mongodb/mongo-go-driver/mongo"
 	"google.golang.org/api/option"
 	dialogflowpb "google.golang.org/genproto/googleapis/cloud/dialogflow/v2"
 )
@@ -22,17 +24,29 @@ var (
 	certFilename    string
 	certKeyFilename string
 	listenAddr      string
+	mongoConnString string
+)
+
+const (
+	dbName               = "coffee-demo"
+	ordersCollectionName = "orders"
+	dbTimeout            = 5 * time.Second
 )
 
 type loggingHandlerFunc func(*logrus.Logger, http.ResponseWriter, *http.Request)
 
 type coffeeserver struct {
-	log                      *logrus.Logger
+	log *logrus.Logger
+
+	// Dialogflow-related
 	dialogflowSessionsClient *dialogflow.SessionsClient
 	ctx                      context.Context
 	languageCode             string
 	projectID                string
 	sessionID                string
+
+	// MongoDB
+	mongo *mongo.Client
 }
 
 func (cs *coffeeserver) getDialogFlowSessionsClient() (*dialogflow.SessionsClient, error) {
@@ -54,6 +68,27 @@ func (cs *coffeeserver) getDialogFlowSessionsClient() (*dialogflow.SessionsClien
 	cs.dialogflowSessionsClient = dialogflowSessionsClient
 	return cs.dialogflowSessionsClient, nil
 	// defer sessionClient.Close()
+}
+
+func (cs *coffeeserver) saveOrder(coffeeType string, coffeeQty int) {
+	cs.log.WithFields(logrus.Fields{"coffeeType": coffeeType, "coffeeQty": coffeeQty}).Info("Saving order")
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
+	defer cancel()
+	ordersCollection := cs.mongo.Database(dbName).Collection(ordersCollectionName)
+
+	order := struct {
+		coffeeType string
+		coffeeQty  int
+	}{
+		coffeeType: coffeeType,
+		coffeeQty:  coffeeQty,
+	}
+
+	if _, err := ordersCollection.InsertOne(ctx, order); err != nil {
+		cs.log.Error("Saving order failed: ", err)
+	}
+
 }
 
 func (cs *coffeeserver) orderHandler(w http.ResponseWriter, r *http.Request) {
@@ -153,6 +188,25 @@ func newCoffeeServer(log *logrus.Logger) *coffeeserver {
 	cs.sessionID = "24e636f5-c721-5517-3538-fcf612ca9b33"
 	cs.languageCode = "en"
 
+	if mongoConnString != "" {
+		db, err := mongo.NewClient(mongoConnString)
+		if err != nil {
+			log.Error("Error creating mongodb connection: ", err)
+			return nil
+		}
+		err = db.Connect(context.TODO())
+		if err != nil {
+			log.Error("Error creating mongodb connection: ", err)
+			return nil
+		}
+
+		log.Info("Created mongodb connection for ", mongoConnString)
+
+		cs.mongo = db
+	}
+
+	cs.saveOrder("test", 2)
+
 	return &cs
 }
 
@@ -184,6 +238,7 @@ func main() {
 func init() {
 	flag.BoolVar(&verbose, "verbose", false, "Verbose logging")
 	flag.StringVar(&listenAddr, "addr", ":5000", "Address to listen on")
+	flag.StringVar(&mongoConnString, "mongo", "mongodb://localhost:27017", "Connection string for mondodb server")
 
 	flag.BoolVar(&tls, "tls", false, "Enable TLS")
 	flag.StringVar(&certFilename, "cert", "", "Filename for certificate file (e.g. cert.pem)")

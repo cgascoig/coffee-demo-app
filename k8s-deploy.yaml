@@ -13,10 +13,19 @@ spec:
     spec:
       containers:
       - name: coffee-demo-app
-        image: cgascoig/coffee-demo-app
+        image: cgascoig/coffee-demo-app:latest
+        imagePullPolicy: Always
         ports:
         - name: http
           containerPort: 5000
+        volumeMounts:
+        - name: dialogflow-key
+          mountPath: "/keys"
+          readOnly: true
+      volumes:
+      - name: dialogflow-key
+        secret: 
+          secretName: dialogflow-key
 ---
 apiVersion: v1
 kind: Service

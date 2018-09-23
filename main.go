@@ -9,6 +9,8 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/mongodb/mongo-go-driver/bson"
+
 	dialogflow "cloud.google.com/go/dialogflow/apiv2"
 	"github.com/Sirupsen/logrus"
 	structpb "github.com/golang/protobuf/ptypes/struct"
@@ -28,9 +30,10 @@ var (
 )
 
 const (
-	dbName               = "coffee-demo"
-	ordersCollectionName = "orders"
-	dbTimeout            = 5 * time.Second
+	dbName                 = "coffee-demo"
+	ordersCollectionName   = "orders"
+	accountsCollectionName = "employeeAccounts"
+	dbTimeout              = 5 * time.Second
 )
 
 type coffeeserver struct {
@@ -69,12 +72,65 @@ func (cs *coffeeserver) getDialogFlowSessionsClient() (*dialogflow.SessionsClien
 }
 
 type coffeeOrder struct {
-	CoffeeType string
-	CoffeeQty  int
+	ID         string  `bson:"_id,omitempty" json:"_id,omitempty"`
+	CoffeeType string  `bson:"coffeetype" json:"coffeetype"`
+	CoffeeQty  int     `bson:"coffeeqty" json:"coffeeqty"`
+	EmployeeID string  `bson:"employeeId" json:"employeeId"`
+	Amount     float32 `bson:"amount" json:"amount"`
 }
 
-func (cs *coffeeserver) saveOrder(coffeeType string, coffeeQty int) error {
-	cs.log.WithFields(logrus.Fields{"coffeeType": coffeeType, "coffeeQty": coffeeQty}).Info("Saving order")
+func (cs *coffeeserver) getCoffeePrice(coffeeType string) (float32, error) {
+	prices := map[string]float32{
+		"latte":    3.50,
+		"espresso": 3.0,
+	}
+
+	if price, ok := prices[coffeeType]; ok {
+		return price, nil
+	}
+	return 0, fmt.Errorf("Unknown coffee type")
+}
+
+func (cs *coffeeserver) chargeAccount(employeeID string, amount float32) error {
+	cs.log.WithFields(logrus.Fields{"employeeID": employeeID, "amount": amount}).Info("Charging account")
+
+	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
+	defer cancel()
+	accountsCollection := cs.mongo.Database(dbName).Collection(accountsCollectionName)
+
+	res, err := accountsCollection.UpdateOne(ctx,
+		bson.NewDocument(
+			bson.EC.String("employeeId", employeeID),
+			bson.EC.SubDocumentFromElements("balance", bson.EC.Double("$gt", float64(amount))),
+		),
+		bson.NewDocument(
+			bson.EC.SubDocumentFromElements("$inc", bson.EC.Double("balance", -float64(amount))),
+		),
+	)
+
+	if err != nil || res.ModifiedCount != 1 {
+		cs.log.Error("Unable to charge account: ", err)
+		return fmt.Errorf("Unable to charge account %s %f: %v", employeeID, amount, err)
+	}
+
+	return nil
+}
+
+func (cs *coffeeserver) saveOrder(coffeeType string, coffeeQty int, employeeID string) error {
+	cs.log.WithFields(logrus.Fields{"coffeeType": coffeeType, "coffeeQty": coffeeQty, "employeeID": employeeID}).Info("Saving order")
+
+	price, err := cs.getCoffeePrice(coffeeType)
+	if err != nil {
+		cs.log.Error("Saving order failed: ", err)
+		return fmt.Errorf("Saving order failed: %s", err)
+	}
+
+	amount := price * float32(coffeeQty)
+	err = cs.chargeAccount(employeeID, amount)
+	if err != nil {
+		cs.log.Error("Saving order failed: ", err)
+		return fmt.Errorf("Payment declined - insufficient funds")
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 	defer cancel()
@@ -83,6 +139,7 @@ func (cs *coffeeserver) saveOrder(coffeeType string, coffeeQty int) error {
 	order := coffeeOrder{
 		CoffeeType: coffeeType,
 		CoffeeQty:  coffeeQty,
+		Amount:     amount,
 	}
 
 	if _, err := ordersCollection.InsertOne(ctx, &order); err != nil {
@@ -137,6 +194,7 @@ func (cs *coffeeserver) orderHandler(w http.ResponseWriter, r *http.Request) {
 
 	if fulfillmentText == "" && queryResult.AllRequiredParamsPresent {
 		coffeeType := parameters.Fields["coffee"].GetStringValue()
+		employeeID := parameters.Fields["employeeId"].GetStringValue()
 		qtyField := parameters.Fields["quantity"]
 
 		var coffeeQty int
@@ -152,13 +210,13 @@ func (cs *coffeeserver) orderHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		if err := cs.saveOrder(coffeeType, coffeeQty); err != nil {
-			fmt.Fprintf(w, "Error saving order to database")
+		if err := cs.saveOrder(coffeeType, coffeeQty, employeeID); err != nil {
+			fmt.Fprintf(w, "Error processing order: %s", err)
 			return
 		}
 
-		cs.log.Info("Coffee type: ", coffeeType, " quantity: ", coffeeQty)
-		fmt.Fprintf(w, "OK, submitting your order for %d %s", coffeeQty, coffeeType)
+		cs.log.Info("Coffee type: ", coffeeType, " quantity: ", coffeeQty, " employeeID: ", employeeID)
+		fmt.Fprintf(w, "OK, submitting your order for %d %s charging account %s", coffeeQty, coffeeType, employeeID)
 	} else {
 		fmt.Fprintf(w, fulfillmentText)
 	}
@@ -212,8 +270,6 @@ func newCoffeeServer(log *logrus.Logger) *coffeeserver {
 
 		cs.mongo = db
 	}
-
-	cs.saveOrder("test", 2)
 
 	return &cs
 }

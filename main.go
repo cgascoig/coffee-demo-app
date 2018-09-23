@@ -33,8 +33,6 @@ const (
 	dbTimeout            = 5 * time.Second
 )
 
-type loggingHandlerFunc func(*logrus.Logger, http.ResponseWriter, *http.Request)
-
 type coffeeserver struct {
 	log *logrus.Logger
 
@@ -70,24 +68,29 @@ func (cs *coffeeserver) getDialogFlowSessionsClient() (*dialogflow.SessionsClien
 	// defer sessionClient.Close()
 }
 
-func (cs *coffeeserver) saveOrder(coffeeType string, coffeeQty int) {
+type coffeeOrder struct {
+	CoffeeType string
+	CoffeeQty  int
+}
+
+func (cs *coffeeserver) saveOrder(coffeeType string, coffeeQty int) error {
 	cs.log.WithFields(logrus.Fields{"coffeeType": coffeeType, "coffeeQty": coffeeQty}).Info("Saving order")
 
 	ctx, cancel := context.WithTimeout(context.Background(), dbTimeout)
 	defer cancel()
 	ordersCollection := cs.mongo.Database(dbName).Collection(ordersCollectionName)
 
-	order := struct {
-		coffeeType string
-		coffeeQty  int
-	}{
-		coffeeType: coffeeType,
-		coffeeQty:  coffeeQty,
+	order := coffeeOrder{
+		CoffeeType: coffeeType,
+		CoffeeQty:  coffeeQty,
 	}
 
-	if _, err := ordersCollection.InsertOne(ctx, order); err != nil {
+	if _, err := ordersCollection.InsertOne(ctx, &order); err != nil {
 		cs.log.Error("Saving order failed: ", err)
+		return fmt.Errorf("Saving order failed: %s", err)
 	}
+
+	return nil
 
 }
 
@@ -146,6 +149,11 @@ func (cs *coffeeserver) orderHandler(w http.ResponseWriter, r *http.Request) {
 		default:
 			cs.log.Error("Unrecognised type for quantity field", qtyField.GetKind())
 			http.Error(w, "Unrecognised type for quantity field", http.StatusInternalServerError)
+			return
+		}
+
+		if err := cs.saveOrder(coffeeType, coffeeQty); err != nil {
+			fmt.Fprintf(w, "Error saving order to database")
 			return
 		}
 

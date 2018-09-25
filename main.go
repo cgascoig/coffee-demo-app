@@ -151,19 +151,11 @@ func (cs *coffeeserver) saveOrder(coffeeType string, coffeeQty int, employeeID s
 
 }
 
-func (cs *coffeeserver) orderHandler(w http.ResponseWriter, r *http.Request) {
+func (cs *coffeeserver) orderHandlerAudio(r *http.Request) *dialogflowpb.DetectIntentRequest {
 	body, err := ioutil.ReadAll(r.Body)
 	if err != nil {
-		http.Error(w, "Unable to get audio bytes", http.StatusBadRequest)
 		cs.log.Error("Unable to get audio bytes")
-		return
-	}
-	// ioutil.WriteFile("test.wav", body, 0777)
-
-	sessionClient, err := cs.getDialogFlowSessionsClient()
-	if err != nil {
-		http.Error(w, "Couldn't get dialogflow sessionClient object", http.StatusInternalServerError)
-		return
+		return nil
 	}
 
 	cs.log.Debug("Sending audio samples to dialogflow to detect intent")
@@ -178,7 +170,45 @@ func (cs *coffeeserver) orderHandler(w http.ResponseWriter, r *http.Request) {
 	queryInput := dialogflowpb.QueryInput{Input: &queryAudioInput}
 	request := dialogflowpb.DetectIntentRequest{Session: sessionPath, QueryInput: &queryInput, InputAudio: body}
 
-	response, err := sessionClient.DetectIntent(cs.ctx, &request)
+	return &request
+}
+
+func (cs *coffeeserver) orderHandlerText(r *http.Request) *dialogflowpb.DetectIntentRequest {
+	body, err := ioutil.ReadAll(r.Body)
+	if err != nil {
+		cs.log.Error("Unable to get audio bytes")
+		return nil
+	}
+
+	cs.log.Debug("Sending text to dialogflow to detect intent")
+
+	sessionPath := fmt.Sprintf("projects/%s/agent/sessions/%s", cs.projectID, cs.sessionID)
+
+	textInput := dialogflowpb.TextInput{Text: string(body), LanguageCode: cs.languageCode}
+	queryTextInput := dialogflowpb.QueryInput_Text{Text: &textInput}
+	queryInput := dialogflowpb.QueryInput{Input: &queryTextInput}
+	request := dialogflowpb.DetectIntentRequest{Session: sessionPath, QueryInput: &queryInput}
+
+	return &request
+}
+
+func (cs *coffeeserver) orderHandler(w http.ResponseWriter, r *http.Request) {
+	var request *dialogflowpb.DetectIntentRequest
+
+	contentType := r.Header.Get("Content-Type")
+	if contentType == "audio/wav" {
+		request = cs.orderHandlerAudio(r)
+	} else if contentType == "text/plain" {
+		request = cs.orderHandlerText(r)
+	}
+
+	sessionClient, err := cs.getDialogFlowSessionsClient()
+	if err != nil {
+		http.Error(w, "Couldn't get dialogflow sessionClient object", http.StatusInternalServerError)
+		return
+	}
+
+	response, err := sessionClient.DetectIntent(cs.ctx, request)
 	if err != nil {
 		http.Error(w, "Error calling dialogflow service", http.StatusInternalServerError)
 		cs.log.Error("Error calling dialogflow service: ", err)
@@ -220,7 +250,6 @@ func (cs *coffeeserver) orderHandler(w http.ResponseWriter, r *http.Request) {
 	} else {
 		fmt.Fprintf(w, fulfillmentText)
 	}
-
 }
 
 func (cs *coffeeserver) indexHandler(w http.ResponseWriter, r *http.Request) {

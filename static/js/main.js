@@ -120,6 +120,26 @@ function stopRecording() {
 	console.log('Recording stopped');
 }
 
+function sendText() {
+	console.log("sendText() called");
+
+	$("#spinner").show("slow");
+
+	$.ajax({
+		type: 'POST',
+		url: 'order',
+		data: "can I have a latte for employee ID 123",
+		contentType: 'text/plain', // set accordingly
+		processData: false
+	}).done(function(data) {
+			console.log(data);
+			$("#response").text(data);
+	})
+	.always(function(data) {
+		$("#spinner").hide("slow");
+	});
+}
+
 
 $(function() {
   console.log( "ready!" );
@@ -130,4 +150,6 @@ $(function() {
 	$("#recordButton").mousedown(startRecording);
 	$("#recordButton").mouseup(stopRecording);
 	$("#recordButton").mouseleave(stopRecording);
+	$("#sendTextButton").click(sendText);
+
 });

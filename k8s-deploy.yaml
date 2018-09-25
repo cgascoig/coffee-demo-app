@@ -2,6 +2,7 @@ apiVersion: extensions/v1beta1
 kind: Deployment
 metadata:
   name: coffee-demo-app
+  namespace: coffee-demo
   labels:
     name: coffee-demo-app
 spec:
@@ -15,6 +16,11 @@ spec:
       - name: coffee-demo-app
         image: cgascoig/coffee-demo-app:latest
         imagePullPolicy: Always
+        command: 
+          - /coffee-demo-app
+          - -verbose
+          - -mongo
+          - mongodb://coffee-demo-mongo:27017
         ports:
         - name: http
           containerPort: 5000
@@ -31,6 +37,7 @@ apiVersion: v1
 kind: Service
 metadata:
   name: coffee-demo-app
+  namespace: coffee-demo
   labels:
     name: coffee-demo-app
 spec:
@@ -42,18 +49,135 @@ spec:
     name: coffee-demo-app
 ---
 apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: coffee-demo-reporting
+  namespace: coffee-demo
+  labels:
+    name: coffee-demo-reporting
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        name: coffee-demo-reporting
+    spec:
+      containers:
+      - name: coffee-demo-reporting
+        image: cgascoig/coffee-demo-reporting:latest
+        imagePullPolicy: Always
+        command: 
+          - /coffee-demo-reporting
+          - -verbose
+          - -mongo
+          - mongodb://coffee-demo-mongo:27017
+        ports:
+        - name: http
+          containerPort: 5000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coffee-demo-reporting
+  namespace: coffee-demo
+  labels:
+    name: coffee-demo-reporting
+spec:
+  ports:
+    # the port that this service should serve on
+  - port: 5000
+    targetPort: 5000
+  selector:
+    name: coffee-demo-reporting
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: coffee-demo-front-end
+  namespace: coffee-demo
+  labels:
+    name: coffee-demo-front-end
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        name: coffee-demo-front-end
+    spec:
+      containers:
+      - name: coffee-demo-front-end
+        image: cgascoig/coffee-demo-front-end:latest
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 80
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coffee-demo-front-end
+  namespace: coffee-demo
+  labels:
+    name: coffee-demo-front-end
+spec:
+  ports:
+    # the port that this service should serve on
+  - port: 80
+    targetPort: 80
+  selector:
+    name: coffee-demo-front-end
+---
+apiVersion: extensions/v1beta1
+kind: Deployment
+metadata:
+  name: coffee-demo-mongo
+  namespace: coffee-demo
+  labels:
+    name: coffee-demo-mongo
+spec:
+  replicas: 1
+  template:
+    metadata:
+      labels:
+        name: coffee-demo-mongo
+    spec:
+      containers:
+      - name: coffee-demo-mongo
+        image: mongo
+        imagePullPolicy: Always
+        ports:
+        - name: mongo
+          containerPort: 27017
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: coffee-demo-mongo
+  namespace: coffee-demo
+  labels:
+    name: coffee-demo-mongo
+spec:
+  ports:
+    # the port that this service should serve on
+  - port: 27017
+    targetPort: 27017
+  selector:
+    name: coffee-demo-mongo
+---
+apiVersion: extensions/v1beta1
 kind: Ingress
 metadata:
   annotations:
     kubernetes.io/ingress.class: nginx
     nginx.ingress.kubernetes.io/add-base-url: "true"
     nginx.ingress.kubernetes.io/rewrite-target: /
-  name: coffee-demo-app
+  name: coffee-demo-front-end
+  namespace: coffee-demo
 spec:
   rules:
   - http:
       paths:
       - backend:
-          serviceName: coffee-demo-app
-          servicePort: 5000
-        path: /coffee-demo-app
+          serviceName: coffee-demo-front-end
+          servicePort: 80
+        path: /coffee-demo

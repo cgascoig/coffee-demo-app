@@ -81,8 +81,9 @@ type coffeeOrder struct {
 
 func (cs *coffeeserver) getCoffeePrice(coffeeType string) (float32, error) {
 	prices := map[string]float32{
-		"latte":    3.50,
-		"espresso": 3.0,
+		"latte":      3.50,
+		"espresso":   3.0,
+		"long black": 3.50,
 	}
 
 	if price, ok := prices[coffeeType]; ok {
